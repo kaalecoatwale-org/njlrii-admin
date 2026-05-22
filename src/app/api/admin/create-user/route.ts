@@ -113,13 +113,13 @@ export async function POST(req: NextRequest) {
                   <td style="font-size: 14px; font-weight: 600; color: #0F172A;">${email.trim().toLowerCase()}</td>
                 </tr>
                 <tr>
-                  <td style="font-size: 12.5px; font-weight: bold; color: #64748b; text-transform: uppercase;">Temporary Password</td>
-                  <td style="font-size: 14px; font-family: monospace; font-weight: bold; color: #FC0434; letter-spacing: 0.05em;">${password}</td>
+                  <td style="font-size: 12.5px; font-weight: bold; color: #64748b; text-transform: uppercase;">Assigned Role</td>
+                  <td style="font-size: 14px; font-weight: 600; color: #0F172A;">${roleLabel}</td>
                 </tr>
               </table>
 
               <div style="background-color: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; padding: 14px; font-size: 12.5px; color: #b45309; line-height: 1.5; margin-bottom: 24px;">
-                🔑 <strong>Security Note:</strong> Your email has been pre-confirmed. Please log in to your dashboard and change this temporary password immediately.
+                🔑 <strong>Security Note:</strong> Your temporary login password will be shared with you separately by your administrator through a secure channel (e.g. direct message or phone call). Please change your password immediately after your first login.
               </div>
 
               <div style="text-align: center; margin: 32px 0;">

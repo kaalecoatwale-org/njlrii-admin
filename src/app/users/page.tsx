@@ -47,6 +47,7 @@ export default function UsersPage() {
   const [inviteRole, setInviteRole] = useState<Role>('author');
   const [inviteFullName, setInviteFullName] = useState('');
   const [invitePassword, setInvitePassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [createdCredentials, setCreatedCredentials] = useState<{ email: string; password: string; role: Role; fullName: string } | null>(null);
 
@@ -130,22 +131,29 @@ export default function UsersPage() {
     );
   }
 
-  // Update user role
+  // Update user role — calls the secure server-side API route
+  // (never mutates directly via the anon client, which has no server-side authz)
   const handleRoleChange = async (targetUserId: string, newRole: Role) => {
-    if (targetUserId === user.id && newRole !== 'super_admin') {
-      setError('You cannot demote your own super_admin account. Ask another super_admin to do this.');
-      return;
-    }
     setUpdatingUserId(targetUserId);
     setError('');
     setSuccess('');
     try {
-      const { error: updateError } = await supabase
-        .from('user_profiles')
-        .update({ role: newRole })
-        .eq('id', targetUserId);
+      // Get the current session token to authenticate the server request
+      const sessionData = await supabase.auth.getSession();
+      const token = sessionData.data.session?.access_token;
+      if (!token) throw new Error('Authentication session not found. Please log in again.');
 
-      if (updateError) throw updateError;
+      const response = await fetch('/api/admin/update-role', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ targetUserId, newRole }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to update role.');
 
       setSuccess(`Role updated successfully to "${getRoleConfig(newRole).label}".`);
       await loadUsers();
@@ -179,8 +187,8 @@ export default function UsersPage() {
       return;
     }
 
-    if (invitePassword.length < 6) {
-      setError('Password must be at least 6 characters long.');
+    if (invitePassword.length < 12) {
+      setError('Password must be at least 12 characters long for security.');
       setInviteLoading(false);
       return;
     }
@@ -496,14 +504,29 @@ export default function UsersPage() {
                         🎲 Generate Random
                       </button>
                     </label>
-                    <input
-                      type="text"
-                      value={invitePassword}
-                      onChange={e => setInvitePassword(e.target.value)}
-                      placeholder="e.g. TempPass123! (Min 6 chars)"
-                      className="form-input-control"
-                      required
-                    />
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={invitePassword}
+                        onChange={e => setInvitePassword(e.target.value)}
+                        placeholder="Min 12 characters"
+                        className="form-input-control"
+                        style={{ paddingRight: '80px' }}
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(prev => !prev)}
+                        style={{
+                          position: 'absolute', right: '10px', top: '50%',
+                          transform: 'translateY(-50%)', background: 'none',
+                          border: 'none', cursor: 'pointer', fontSize: '11px',
+                          color: 'var(--primary)', fontWeight: 'bold', padding: '2px 6px'
+                        }}
+                      >
+                        {showPassword ? '🙈 Hide' : '👁 Show'}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="form-field-group">

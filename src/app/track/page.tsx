@@ -473,7 +473,7 @@ export default function TrackPaperPage() {
                                 opacity: 0.95,
                                 lineHeight: '1.5'
                               }}>
-                                "{feedbackText || 'Please contact submission@njlrii.com for details regarding this checkpoint action.'}"
+                                "{feedbackText || 'Please contact journalnjlrii@gmail.com for details regarding this checkpoint action.'}"
                               </p>
                             </div>
                           )}

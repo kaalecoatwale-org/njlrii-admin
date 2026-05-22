@@ -47,7 +47,6 @@ export async function POST(req: NextRequest) {
 
     // 4. Parse request body
     const {
-      recipient_email,
       author_name,
       title,
       tracking_id,
@@ -58,9 +57,23 @@ export async function POST(req: NextRequest) {
       certificate_url
     } = await req.json();
 
-    if (!recipient_email || !author_name || !title || !tracking_id || !vol_number || !iss_number || !year || !article_url || !certificate_url) {
+    if (!author_name || !title || !tracking_id || !vol_number || !iss_number || !year || !article_url || !certificate_url) {
       return NextResponse.json({ error: 'Missing required parameters.' }, { status: 400 });
     }
+
+    // 5. Look up the verified author email from the DB using tracking_id
+    // SECURITY: Never trust caller-supplied recipient_email — use DB value instead
+    const { data: manuscript, error: manuscriptError } = await supabaseAdmin
+      .from('manuscripts')
+      .select('author_email')
+      .eq('tracking_id', tracking_id)
+      .single();
+
+    if (manuscriptError || !manuscript) {
+      return NextResponse.json({ error: 'Manuscript not found for this tracking ID.' }, { status: 404 });
+    }
+
+    const recipient_email = manuscript.author_email;
 
     const subject = `🎉 Congratulations! Your Manuscript has been Published in NJLRII`;
     

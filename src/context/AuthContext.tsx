@@ -63,12 +63,14 @@ async function fetchProfileFromDB(authUser: User): Promise<UserProfile> {
     console.error('Profile fetch error:', error?.message);
   }
 
-  // Fallback: construct from JWT metadata
+  // Fallback: construct a safe default profile.
+  // SECURITY: Never read 'role' from user_metadata — any user can self-write it
+  // via supabase.auth.updateUser(). Always default to the lowest-privilege role.
   return {
     id: authUser.id,
     email: authUser.email || '',
     full_name: (authUser.user_metadata?.full_name as string) || null,
-    role: ((authUser.user_metadata?.role as string) || 'author') as UserProfile['role'],
+    role: 'author' as UserProfile['role'],
     created_at: new Date().toISOString(),
   };
 }

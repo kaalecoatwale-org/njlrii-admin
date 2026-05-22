@@ -1,20 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { sendEmail } from '@/lib/email';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-
-// Initialize Supabase client using Service Role to bypass client-side RLS policies for public form submission
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-  },
-});
+import { checkRateLimit } from '@/lib/ratelimit';
 
 // Helper to generate a unique random tracking ID matching the pattern NJLRII-V[Vol]I[Iss]-[A-Z0-9]{5}
-async function generateUniqueTrackingId(): Promise<string> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function generateUniqueTrackingId(supabaseAdmin: any): Promise<string> {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let isUnique = false;
   let trackingId = '';
@@ -67,6 +58,35 @@ async function generateUniqueTrackingId(): Promise<string> {
 
 export async function POST(req: NextRequest) {
   try {
+    // 1. Rate Limiting Check
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || req.headers.get('x-real-ip') || '127.0.0.1';
+    const rateLimit = await checkRateLimit('submit', ip);
+    if (!rateLimit.success) {
+      return NextResponse.json(
+        { error: 'Too many submission requests. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            ...(rateLimit.limit !== undefined ? { 'X-RateLimit-Limit': rateLimit.limit.toString() } : {}),
+            ...(rateLimit.remaining !== undefined ? { 'X-RateLimit-Remaining': rateLimit.remaining.toString() } : {}),
+            ...(rateLimit.reset !== undefined ? { 'X-RateLimit-Reset': rateLimit.reset.toString() } : {}),
+          },
+        }
+      );
+    }
+
+    // Initialize admin client inside handler to ensure env vars are loaded
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 });
+    }
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
     const body = await req.json();
 
     const {
@@ -81,9 +101,12 @@ export async function POST(req: NextRequest) {
       manuscript_pdf_url,
     } = body;
 
-    // Validate required fields
+    // Validate required fields with server-side length limits
     if (!author_name || !author_name.trim()) {
       return NextResponse.json({ error: 'First Author Name is required.' }, { status: 400 });
+    }
+    if (author_name.trim().length > 200) {
+      return NextResponse.json({ error: 'Author name is too long (max 200 characters).' }, { status: 400 });
     }
     if (!author_email || !author_email.trim() || !author_email.includes('@')) {
       return NextResponse.json({ error: 'A valid First Author Email is required.' }, { status: 400 });
@@ -97,11 +120,27 @@ export async function POST(req: NextRequest) {
     if (!title || !title.trim()) {
       return NextResponse.json({ error: 'Manuscript Title is required.' }, { status: 400 });
     }
+    if (title.trim().length > 500) {
+      return NextResponse.json({ error: 'Manuscript title is too long (max 500 characters).' }, { status: 400 });
+    }
     if (!abstract || !abstract.trim()) {
       return NextResponse.json({ error: 'Manuscript Abstract is required.' }, { status: 400 });
     }
+    if (abstract.trim().length > 8000) {
+      return NextResponse.json({ error: 'Abstract is too long (max 8000 characters).' }, { status: 400 });
+    }
     if (!manuscript_pdf_url || !manuscript_pdf_url.trim()) {
       return NextResponse.json({ error: 'Manuscript Document Link or Upload is required.' }, { status: 400 });
+    }
+
+    // Validate that manuscript_pdf_url is a valid URL (prevents SSRF / junk data)
+    try {
+      const parsedUrl = new URL(manuscript_pdf_url.trim());
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        return NextResponse.json({ error: 'Manuscript URL must use http or https.' }, { status: 400 });
+      }
+    } catch {
+      return NextResponse.json({ error: 'Manuscript URL is not a valid URL.' }, { status: 400 });
     }
 
     // Process keywords
@@ -126,7 +165,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Generate a unique tracking ID
-    const trackingId = await generateUniqueTrackingId();
+    const trackingId = await generateUniqueTrackingId(supabaseAdmin);
 
     // Insert manuscript into the database
     const { data: insertedData, error: insertError } = await supabaseAdmin
@@ -219,7 +258,7 @@ export async function POST(req: NextRequest) {
             <td style="padding: 24px 40px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
               <span style="font-size: 11px; color: #94a3b8; display: block; line-height: 1.5;">
                 National Journal of Legal Research and Innovative Ideas (NJLRII)<br/>
-                For amendments, reply directly to this thread or email <a href="mailto:submission@njlrii.com" style="color: #FC0434; text-decoration: none;">submission@njlrii.com</a>.
+                For amendments, reply directly to this thread or email <a href="mailto:journalnjlrii@gmail.com" style="color: #FC0434; text-decoration: none;">journalnjlrii@gmail.com</a>.
               </span>
             </td>
           </tr>

@@ -2,6 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { sendEmail } from '@/lib/email';
 
+/**
+ * Escape HTML special characters to prevent content injection in emails.
+ * User-supplied text (feedback, author names) must be escaped before
+ * being interpolated into HTML strings.
+ */
+function escapeHtml(str: string | null | undefined): string {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 export async function POST(req: NextRequest) {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -47,9 +62,6 @@ export async function POST(req: NextRequest) {
 
     // 4. Parse request body
     const {
-      recipient_email,
-      author_name,
-      title,
       tracking_id,
       step_num,
       step_title,
@@ -57,9 +69,29 @@ export async function POST(req: NextRequest) {
       feedback
     } = await req.json();
 
-    if (!recipient_email || !author_name || !title || !tracking_id || !step_title || !step_status) {
+    if (!tracking_id || !step_title || !step_status) {
       return NextResponse.json({ error: 'Missing required parameters.' }, { status: 400 });
     }
+
+    // 5. Look up the manuscript to get the verified author email and name from DB
+    // SECURITY: Never trust the caller-supplied recipient_email — it could point to any address.
+    const { data: manuscript, error: manuscriptError } = await supabaseAdmin
+      .from('manuscripts')
+      .select('author_email, author_name, title')
+      .eq('tracking_id', tracking_id)
+      .single();
+
+    if (manuscriptError || !manuscript) {
+      return NextResponse.json({ error: 'Manuscript not found for this tracking ID.' }, { status: 404 });
+    }
+
+    // Use DB values — safe, verified email addresses
+    const recipient_email = manuscript.author_email;
+    const author_name = escapeHtml(manuscript.author_name);
+    const title = escapeHtml(manuscript.title);
+    const safe_tracking_id = escapeHtml(tracking_id);
+    const safe_step_title = escapeHtml(step_title);
+    const safe_feedback = escapeHtml(feedback);
 
     const liveSiteUrl = process.env.NEXT_PUBLIC_LIVE_SITE_URL || 'https://www.njlrii.com';
     const trackingUrl = `${liveSiteUrl}/track?id=${tracking_id}`;
@@ -69,10 +101,10 @@ export async function POST(req: NextRequest) {
 
     if (step_status === 'passed') {
       // Email 2: Screening Step Passed
-      subject = `NJLRII Vetting Update: ${step_title} Cleared`;
+      subject = `NJLRII Vetting Update: ${safe_step_title} Cleared`;
       
-      const feedbackSection = feedback 
-        ? `<p style="margin: 8px 0 0 0; font-size: 13px; font-style: italic; color: #374151;">"${feedback}"</p>`
+      const feedbackSection = safe_feedback 
+        ? `<p style="margin: 8px 0 0 0; font-size: 13px; font-style: italic; color: #374151;">"${safe_feedback}"</p>`
         : '';
 
       emailHtml = `<!DOCTYPE html>
@@ -98,7 +130,7 @@ export async function POST(req: NextRequest) {
               <h2 style="font-size: 20px; font-weight: 800; color: #0F172A; margin: 0 0 16px 0; line-height: 1.3;">Editorial Milestone Passed</h2>
               <p style="font-size: 14.5px; color: #475569; line-height: 1.6; margin: 0 0 24px 0;">
                 Dear <strong>${author_name}</strong>,<br/><br/>
-                We are pleased to inform you that your manuscript <strong>"${title}"</strong> (Tracking ID: <span style="font-family: monospace; font-weight: bold; color: #10B981;">${tracking_id}</span>) has successfully passed the editorial screening checkpoint: <strong>${step_title}</strong>.
+                We are pleased to inform you that your manuscript <strong>"${title}"</strong> (Tracking ID: <span style="font-family: monospace; font-weight: bold; color: #10B981;">${safe_tracking_id}</span>) has successfully passed the editorial screening checkpoint: <strong>${safe_step_title}</strong>.
               </p>
 
               <div style="background-color: rgba(16, 185, 129, 0.05); border-left: 4px solid #10B981; border-radius: 8px; padding: 18px; margin-bottom: 24px;">
@@ -120,7 +152,7 @@ export async function POST(req: NextRequest) {
           <tr>
             <td style="padding: 24px 40px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
               <span style="font-size: 11px; color: #94a3b8; display: block; line-height: 1.5;">
-                For immediate assistance, contact <a href="mailto:submission@njlrii.com" style="color: #10B981; text-decoration: none;">submission@njlrii.com</a>.
+                For immediate assistance, contact <a href="mailto:journalnjlrii@gmail.com" style="color: #10B981; text-decoration: none;">journalnjlrii@gmail.com</a>.
               </span>
             </td>
           </tr>
@@ -132,7 +164,7 @@ export async function POST(req: NextRequest) {
 </html>`;
     } else if (step_status === 'revision') {
       // Email 3: Revision Requested
-      subject = `⚠️ Revision Required: NJLRII Editorial Screening - ${tracking_id}`;
+      subject = `⚠️ Revision Required: NJLRII Editorial Screening - ${safe_tracking_id}`;
       
       const deadlineDate = new Date();
       deadlineDate.setDate(deadlineDate.getDate() + 14);
@@ -165,7 +197,7 @@ export async function POST(req: NextRequest) {
               <h2 style="font-size: 20px; font-weight: 800; color: #0F172A; margin: 0 0 16px 0; line-height: 1.3;">⚠️ Action Required: Revisions Requested</h2>
               <p style="font-size: 14.5px; color: #475569; line-height: 1.6; margin: 0 0 24px 0;">
                 Dear <strong>${author_name}</strong>,<br/><br/>
-                Our Editorial Board has evaluated your manuscript <strong>"${title}"</strong> (Tracking ID: <span style="font-family: monospace; font-weight: bold; color: #d97706;">${tracking_id}</span>) at checkpoint <strong>${step_title}</strong>.
+                Our Editorial Board has evaluated your manuscript <strong>"${title}"</strong> (Tracking ID: <span style="font-family: monospace; font-weight: bold; color: #d97706;">${safe_tracking_id}</span>) at checkpoint <strong>${safe_step_title}</strong>.
                 <br/><br/>
                 Revisions are required in your manuscript document to clear this step.
               </p>
@@ -174,7 +206,7 @@ export async function POST(req: NextRequest) {
               <div style="background-color: rgba(217, 119, 6, 0.05); border-left: 4px solid #d97706; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
                 <span style="font-size: 11px; font-weight: bold; color: #d97706; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 6px;">Editorial Feedback comments:</span>
                 <p style="margin: 0; font-size: 13.5px; font-style: italic; color: #0F172A; line-height: 1.5;">
-                  "${feedback || 'No comments provided.'}"
+                  "${safe_feedback || 'No comments provided.'}"
                 </p>
               </div>
 
@@ -193,7 +225,7 @@ export async function POST(req: NextRequest) {
           <tr>
             <td style="padding: 24px 40px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
               <span style="font-size: 11px; color: #94a3b8; display: block; line-height: 1.5;">
-                For immediate assistance, contact <a href="mailto:submission@njlrii.com" style="color: #d97706; text-decoration: none;">submission@njlrii.com</a>.
+                For immediate assistance, contact <a href="mailto:journalnjlrii@gmail.com" style="color: #d97706; text-decoration: none;">journalnjlrii@gmail.com</a>.
               </span>
             </td>
           </tr>
@@ -205,7 +237,7 @@ export async function POST(req: NextRequest) {
 </html>`;
     } else if (step_status === 'failed') {
       // Email 4: Failed Screening / Rejected
-      subject = `NJLRII Screening Status: Disqualified - ${tracking_id}`;
+      subject = `NJLRII Screening Status: Disqualified - ${safe_tracking_id}`;
       
       emailHtml = `<!DOCTYPE html>
 <html>
@@ -230,16 +262,16 @@ export async function POST(req: NextRequest) {
               <h2 style="font-size: 20px; font-weight: 800; color: #0F172A; margin: 0 0 16px 0; line-height: 1.3;">Editorial Decision: Rejected</h2>
               <p style="font-size: 14.5px; color: #475569; line-height: 1.6; margin: 0 0 24px 0;">
                 Dear <strong>${author_name}</strong>,<br/><br/>
-                Thank you for submitting your manuscript <strong>"${title}"</strong> (Tracking ID: ${tracking_id}) to the <em>National Journal of Legal Research and Innovative Ideas (NJLRII)</em>.
+                Thank you for submitting your manuscript <strong>"${title}"</strong> (Tracking ID: ${safe_tracking_id}) to the <em>National Journal of Legal Research and Innovative Ideas (NJLRII)</em>.
                 <br/><br/>
-                We regret to inform you that during the evaluation step <strong>${step_title}</strong>, the editorial committee determined that the manuscript does not meet the criteria required for publication in the journal.
+                We regret to inform you that during the evaluation step <strong>${safe_step_title}</strong>, the editorial committee determined that the manuscript does not meet the criteria required for publication in the journal.
               </p>
 
               <!-- Editorial Rejection Reason Callout -->
               <div style="background-color: rgba(239, 68, 68, 0.05); border-left: 4px solid #EF4444; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
                 <span style="font-size: 11px; font-weight: bold; color: #EF4444; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 6px;">Evaluation Comments:</span>
                 <p style="margin: 0; font-size: 13.5px; color: #0F172A; line-height: 1.5;">
-                  "${feedback || 'No comments provided.'}"
+                  "${safe_feedback || 'No comments provided.'}"
                 </p>
               </div>
 
