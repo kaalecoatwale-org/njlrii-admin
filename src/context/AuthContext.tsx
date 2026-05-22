@@ -80,6 +80,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Helper to synchronize Supabase session with standard browser cookies
+  // so the Edge middleware (src/proxy.ts) can authenticate user sessions.
+  const syncSessionCookie = (session: any) => {
+    if (typeof document === 'undefined') return;
+    const projectRef = process.env.NEXT_PUBLIC_SUPABASE_URL?.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1];
+    if (!projectRef) return;
+    const cookieName = `sb-${projectRef}-auth-token`;
+
+    if (session?.access_token) {
+      const cookieValue = encodeURIComponent(
+        JSON.stringify({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
+        })
+      );
+      document.cookie = `${cookieName}=${cookieValue}; path=/; max-age=${session.expires_in || 3600}; SameSite=Lax; Secure`;
+    } else {
+      document.cookie = `${cookieName}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax; Secure`;
+    }
+  };
+
   // Track whether the provider is still mounted before setting state
   const isMounted = useRef(true);
   // Track which user we last fetched a profile for (avoid duplicate fetches)
@@ -110,6 +131,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // STEP 1: Get current session immediately (synchronous check)
     supabase.auth.getSession()
       .then(async ({ data: { session } }) => {
+        syncSessionCookie(session);
         if (session?.user) {
           setUserIfChanged(session.user);
           lastFetchedUserId.current = session.user.id;
@@ -133,6 +155,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Skip events that fire before initial session check completes
         // (INITIAL_SESSION is handled by getSession above)
         if (event === 'INITIAL_SESSION') return;
+
+        syncSessionCookie(session);
 
         if (event === 'SIGNED_OUT') {
           if (isMounted.current) {
@@ -178,6 +202,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    syncSessionCookie(null);
     setUser(null);
     setProfile(null);
     lastFetchedUserId.current = null;
